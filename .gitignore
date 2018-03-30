@@ -1,0 +1,8 @@
+*.retry
+*.DS_Store
+*.tgz
+*.retry
+hosts
+.terraform/
+terraform.tfstate
+terraform.tfstate.backup

@@ -1,0 +1,274 @@
+---
+- hosts: all
+  environment:
+    EASYRSA_BATCH: yes
+    EASYRSA_DN: org
+    EASYRSA_KEY_SIZE: 2048
+    EASYRSA_REQ_COUNTRY: ES
+    EASYRSA_REQ_PROVINCE: BCN
+    EASYRSA_REQ_CITY: Barcelona
+    EASYRSA_REQ_ORG: Copyleft Certificate Co
+    EASYRSA_REQ_CN: vpn.swapbytes.com
+    EASYRSA_REQ_EMAIL: system@swapbytes.com
+    EASYRSA_REQ_OU: SwapBytes
+  tasks:
+  - hostname:
+      name: myvpn
+
+  - name: Upgrade all packages
+    yum: name=* state=latest
+
+  - name: Install EPEL repository
+    yum:
+      name: epel-release.noarch
+      state: present
+
+  - name: Basic packages and configs
+    yum: pkg={{item}} state=installed
+    with_items:
+      - bind-utils
+      - htop
+      - nmap
+      - sysstat
+      - vim
+
+  - name: Installing OpenVPN & EasyRSA
+    yum: pkg={{item}} state=installed
+    with_items:
+      - openvpn
+      - easy-rsa
+    tags: openvpn
+
+  - name: Creates directory for dnscrypt-proxy
+    file:
+      path: /usr/local/share/dnscrypt-proxy/
+      state: directory
+    tags: dnscrypt
+
+  - name: Download and unarchive dnscrypt-proxy
+    unarchive:
+      src: https://github.com/jedisct1/dnscrypt-proxy/releases/download/2.0.7/dnscrypt-proxy-linux_arm64-2.0.7.tar.gz
+      dest: /usr/local/share/dnscrypt-proxy/
+      owner: root
+      group: root
+      remote_src: yes
+    tags: dnscrypt
+
+  - name:
+    copy:
+      src: /usr/local/share/dnscrypt-proxy/linux-arm64/example-dnscrypt-proxy.toml
+      dest: /usr/local/share/dnscrypt-proxy/linux-arm64/dnscrypt-proxy.toml
+      remote_src: yes
+      owner: root
+      group: root
+      mode: 0640
+    tags: dnscrypt
+
+  - name: Change the config file for dnscrypt-proxy
+    lineinfile:
+      dest: /usr/local/share/dnscrypt-proxy/linux-arm64/dnscrypt-proxy.toml
+      regexp: '^listen_addresses'
+      line: listen_addresses = ['10.8.0.1:53']
+    tags: dnscrypt
+
+  - name: Install dnscrypt-proxy service
+    shell: /usr/local/share/dnscrypt-proxy/linux-arm64/dnscrypt-proxy -service install
+    tags: dnscrypt
+
+  - name: Start dnscrypt-proxy service
+    shell: /usr/local/share/dnscrypt-proxy/linux-arm64/dnscrypt-proxy -service start
+    tags: dnscrypt
+
+  - name: Build CA & Keys for server
+    command: "{{ item }} chdir=/root/"
+    with_items:
+    - /usr/share/easy-rsa/3/easyrsa init-pki
+    - /usr/share/easy-rsa/3/easyrsa build-ca nopass
+    - /usr/share/easy-rsa/3/easyrsa gen-crl
+    - /usr/share/easy-rsa/3/easyrsa build-server-full server nopass
+    - /usr/share/easy-rsa/3/easyrsa gen-dh
+    - /usr/sbin/openvpn --genkey --secret /root/pki/ta.key
+    - cp -f /root/pki/ca.crt /etc/openvpn/ca.crt
+    - cp -f /root/pki/dh.pem /etc/openvpn/dh.pem
+    - cp -f /root/pki/issued/server.crt /etc/openvpn/server/server.crt
+    - cp -f /root/pki/private/server.key /etc/openvpn/server/server.key
+    - cp -f /root/pki/ta.key /etc/openvpn/ta.key
+    - cp -f /root/pki/crl.pem /etc/openvpn/crl.pem
+    notify: restart openvpn
+    tags: easyrsa
+
+  - name: Get public ip address
+    uri:
+      url: https://ifconfig.co/ip
+      return_content: yes
+    register: ipaddress
+    tags: ovpn
+
+  - name: Build Keys for client
+    command: "{{ item }} chdir=/root/"
+    with_items:
+    - /usr/share/easy-rsa/3/easyrsa build-client-full client nopass
+    - cp -f /root/pki/ca.crt /etc/openvpn/client/ca.crt
+    - cp -f /root/pki/issued/client.crt /etc/openvpn/client/client.crt
+    - cp -f /root/pki/private/client.key /etc/openvpn/client/client.key
+    - cp -f /root/pki/ta.key /etc/openvpn/client/ta.key
+    tags: ovpn
+
+  - name: Build .ovpn file
+    copy:
+      content: |
+        #
+        # WARNING: Build with Ansible
+        # ============================
+        # Secure OpenVPN Client Config
+        #
+        auth SHA512
+        cipher AES-256-CBC
+        client
+        comp-lzo
+        dev tun
+        key-direction 1
+        key-direction 1
+        nobind
+        persist-key
+        persist-tun
+        proto udp
+        pull
+        redirect-gateway def1
+        remote {{ ipaddress.content | trim }} 1194
+        remote-cert-tls server
+        tls-cipher TLS-DHE-RSA-WITH-AES-256-GCM-SHA384:TLS-DHE-RSA-WITH-AES-256-CBC-SHA256:TLS-DHE-RSA-WITH-AES-128-GCM-SHA256:TLS-DHE-RSA-WITH-AES-128-CBC-SHA256
+        tls-client
+        tls-version-min 1.2
+        verb 3
+      dest: /etc/openvpn/client/client.ovpn
+      owner: root
+      group: root
+      mode: 0400
+    tags: ovpn
+
+  - name: Build OVPN package
+    archive:
+      path: /etc/openvpn/client/
+      dest: /root/client.tgz
+    tags: ovpn
+
+  - name: Download .ovpn file to local
+    fetch:
+      src: /root/client.tgz
+      dest: client.tgz
+      flat: yes
+    tags: ovpn
+
+  - name: Disable firewalld
+    shell: systemctl disable firewalld
+
+  - name: Stop firewalld
+    shell: systemctl stop firewalld
+
+  - name: Enable IPv4 traffic forwarding
+    sysctl:
+      name: "net.ipv4.ip_forward"
+      value: 1
+      sysctl_set: yes
+      state: present
+      reload: yes
+    tags: iptables
+
+  - name: Masquerade all traffic from VPN clients
+    iptables:
+      table: nat
+      chain: POSTROUTING
+      source: 10.8.0.0/24
+      out_interface: eth0
+      jump: MASQUERADE
+    become: yes
+    tags: iptables
+
+  - name: Allow established traffic to pass back and forth
+    iptables:
+      action: append
+      chain: FORWARD
+      in_interface: eth0
+      out_interface: tun0
+      ctstate: RELATED,ESTABLISHED
+      jump: ACCEPT
+    become: yes
+    tags: iptables
+
+  - name: Allow traffic initiated from VPN to access LAN
+    iptables:
+      action: append
+      chain: FORWARD
+      in_interface: tun0
+      out_interface: eth0
+      jump: ACCEPT
+    become: yes
+    tags: iptables
+
+  - name: Write the config file for OpenVPN
+    copy:
+      content: |
+        #
+        # WARNING: Build with Ansible
+        # ============================
+        # Secure OpenVPN Server Config
+        #
+
+        # Basic Connection Config
+        dev tun
+        proto udp
+        port 1194
+        keepalive 10 60
+        max-clients 2
+
+        # Certs
+        ca /etc/openvpn/ca.crt
+        cert /etc/openvpn/server/server.crt
+        key /etc/openvpn/server/server.key
+        dh /etc/openvpn/dh.pem
+        tls-auth /etc/openvpn/ta.key 0
+
+        # Ciphers and Hardening
+        reneg-sec 0
+        remote-cert-tls client
+        crl-verify /etc/openvpn/crl.pem
+        tls-version-min 1.2
+        cipher AES-256-CBC
+        auth SHA512
+        tls-cipher TLS-DHE-RSA-WITH-AES-256-GCM-SHA384:TLS-DHE-RSA-WITH-AES-256-CBC-SHA256:TLS-DHE-RSA-WITH-AES-128-GCM-SHA256:TLS-DHE-RSA-WITH-AES-128-CBC-SHA256
+
+        # Drop Privs
+        user nobody
+        group nobody
+
+        # IP pool
+        server 10.8.0.0 255.255.255.0
+        topology subnet
+        ifconfig-pool-persist /etc/openvpn/ipp.txt
+
+        # Misc
+        persist-key
+        persist-tun
+        comp-lzo
+
+        # DHCP Push options force all traffic through VPN and sets DNS servers
+        push "redirect-gateway def1 bypass-dhcp"
+        push "dhcp-option DNS 10.8.0.1"
+
+        # Logging
+        log-append /var/log/openvpn.log
+        verb 3
+      dest: /etc/openvpn/server.conf
+      owner: root
+      group: root
+      mode: 0640
+    notify: restart openvpn
+    tags: openvpn
+
+  handlers:
+  - name: restart openvpn
+    shell: systemctl restart openvpn@server.service
+
+# iptables -A INPUT -s 10.8.0.0/24 -p tcp -m tcp --dport 53 -j ACCEPT
+# iptables -A INPUT -s 10.8.0.0/24 -p udp -m udp --dport 53 -j ACCEPT
