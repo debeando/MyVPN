@@ -1,0 +1,10 @@
+#!/usr/bin/expect -f
+set host [exec tail -n 1 hosts]
+spawn ssh-keygen -R $host
+spawn ssh-copy-id -f root@$host
+expect "Are you sure you want to continue connecting (yes/no)?"
+send "yes\n"
+expect eof
+spawn ssh root@$host
+expect "#"
+interact

@@ -53,15 +53,3 @@ resource "local_file" "host" {
   content  = "[myvpn]\n${scaleway_ip.myvpn.ip}\n"
   filename = "hosts"
 }
-
-resource "null_resource" "ssh_clear_ip" {
-  provisioner "local-exec" {
-    command = "ssh-keygen -R ${scaleway_ip.myvpn.ip}"
-  }
-}
-
-resource "null_resource" "add_ssh_key" {
-  provisioner "local-exec" {
-    command = "ssh-copy-id ${scaleway_ip.myvpn.ip}"
-  }
-}
