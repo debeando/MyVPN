@@ -1,8 +1,9 @@
-*.retry
 *.DS_Store
-*.tgz
 *.retry
-hosts
+*.retry
+*.tgz
 .terraform/
+crash.log
+hosts
 terraform.tfstate
 terraform.tfstate.backup
