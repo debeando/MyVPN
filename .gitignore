@@ -3,6 +3,7 @@
 *.retry
 *.tgz
 .terraform/
+client/
 crash.log
 hosts
 terraform.tfstate
