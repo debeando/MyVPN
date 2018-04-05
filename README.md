@@ -1,5 +1,7 @@
 # MyVPN
 
+Provisioning VM on Scaleway with OpenVPN
+
 ## Requirements:
 
 ```
@@ -8,6 +10,8 @@ brew install ansible
 ```
 
 ## Create instance
+
+Remember to generate and set yours tokens:
 
 ```
 export SCALEWAY_ORGANIZATION=<your-organization-key>
@@ -20,7 +24,6 @@ terraform apply
 ## Configure
 
 ```
-ansible -m ping --inventory=hosts myvpn
 ansible-playbook --inventory=hosts ansible.yml
 ```
 
